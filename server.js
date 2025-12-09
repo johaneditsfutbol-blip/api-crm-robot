@@ -154,11 +154,30 @@ async function buscarCliente(idBusqueda) {
         const searchIn = '#SC_fast_search_top'; 
         const searchBtn = '#SC_fast_search_submit_top';
         
-        if (await page.$(searchIn)) {
+if (await page.$(searchIn)) {
             await page.type(searchIn, idBusqueda);
             await page.click(searchBtn);
-            await esperar(3000); // Tiempo seguro para que cargue la lista
+            await esperar(3000); 
         }
+
+        // 👇 NUEVO: Verificamos si sale el aviso "No hay registros" antes de esperar 15s
+        const mensajeError = await page.evaluate(() => {
+            const el = document.querySelector('#sc_grid_body');
+            return el ? el.innerText.trim() : null;
+        });
+
+        if (mensajeError && mensajeError.includes('No hay registros para mostrar')) {
+            console.log(" ⚠️ Aviso detectado: No hay registros.");
+            await page.close();
+            // Devolvemos esto inmediatamente sin dar error 500
+            return {
+                id: idBusqueda,
+                perfil: { nombre: "No hay registros para mostrar" }, // Ponemos el aviso aquí
+                facturas: [],
+                transacciones: []
+            };
+        }
+        // 👆 FIN DE LO NUEVO
 
         const iconEdit = '.fa-user-edit';
         try { await page.waitForSelector(iconEdit, { timeout: 15000 }); } 
