@@ -133,7 +133,7 @@ async function esperarYExtraer(page, tipo, intentosMax = 5) {
 }
 
 // ==========================================
-// 4. FLUJO DE BÚSQUEDA
+// 4. FLUJO DE BÚSQUEDA (VERSIÓN ESTABLE - SIN NODO)
 // ==========================================
 async function buscarCliente(idBusqueda) {
     if (!globalBrowser) throw new Error("Sistema iniciando...");
@@ -141,7 +141,7 @@ async function buscarCliente(idBusqueda) {
     const page = await globalBrowser.newPage();
     page.setDefaultNavigationTimeout(60000);
 
-    // Bloqueo de imágenes en la nueva pestaña también
+    // Bloqueo de recursos
     await page.setRequestInterception(true);
     page.on('request', (req) => {
         if (['image', 'media', 'font'].includes(req.resourceType())) req.abort();
@@ -154,13 +154,13 @@ async function buscarCliente(idBusqueda) {
         const searchIn = '#SC_fast_search_top'; 
         const searchBtn = '#SC_fast_search_submit_top';
         
-if (await page.$(searchIn)) {
+        if (await page.$(searchIn)) {
             await page.type(searchIn, idBusqueda);
             await page.click(searchBtn);
             await esperar(3000); 
         }
 
-        // 👇 NUEVO: Verificamos si sale el aviso "No hay registros" antes de esperar 15s
+        // Verificación "No hay registros"
         const mensajeError = await page.evaluate(() => {
             const el = document.querySelector('#sc_grid_body');
             return el ? el.innerText.trim() : null;
@@ -169,15 +169,11 @@ if (await page.$(searchIn)) {
         if (mensajeError && mensajeError.includes('No hay registros para mostrar')) {
             console.log(" ⚠️ Aviso detectado: No hay registros.");
             await page.close();
-            // Devolvemos esto inmediatamente sin dar error 500
             return {
                 id: idBusqueda,
-                perfil: { nombre: "No hay registros para mostrar" }, // Ponemos el aviso aquí
-                facturas: [],
-                transacciones: []
+                error: "No hay registros para mostrar"
             };
         }
-        // 👆 FIN DE LO NUEVO
 
         const iconEdit = '.fa-user-edit';
         try { await page.waitForSelector(iconEdit, { timeout: 15000 }); } 
@@ -187,7 +183,6 @@ if (await page.$(searchIn)) {
         await page.click(iconEdit);
         const tab = await (await newTargetPromise).page();
         
-        // Bloqueo en la pestaña final
         await tab.setRequestInterception(true);
         tab.on('request', (req) => {
             if (['image', 'media', 'font'].includes(req.resourceType())) req.abort();
@@ -195,22 +190,86 @@ if (await page.$(searchIn)) {
         });
 
         await tab.bringToFront();
-        await esperar(3000); // Tiempo seguro para carga visual
+        await esperar(4000); // Espera vital para carga de iframes
 
-        // PERFIL
+        // HELPER: Buscar Frame
+        const encontrarFrame = async (selector) => {
+            for (const frame of tab.frames()) {
+                try { if (await frame.$(selector)) return frame; } catch(e){}
+            }
+            return null;
+        };
+
+        // --- A. EXTRAER INPUTS ---
+        let codigo = "N/A", movil = "N/A", fijo = "N/A";
+        const frameDatos = await encontrarFrame('#id_sc_field_cod_cliente');
+        
+        if (frameDatos) {
+            const datos = await frameDatos.evaluate(() => {
+                const val = (id) => { const el = document.querySelector(id); return el ? el.value : "N/A"; };
+                return {
+                    c: val('#id_sc_field_cod_cliente'),
+                    m: val('#id_sc_field_telefono_movil'),
+                    f: val('#id_sc_field_telefono_fijo')
+                };
+            });
+            codigo = datos.c; movil = datos.m; fijo = datos.f;
+            console.log("   ✅ Inputs extraídos.");
+        }
+
+        // --- B. COPIAR LINK ---
+        let linkPago = "No capturado";
+        const frameLink = await encontrarFrame('#sc_copiar_top');
+
+        if (frameLink) {
+            try {
+                const dialogPromise = new Promise(resolve => {
+                    const timeout = setTimeout(() => resolve(null), 2000); 
+                    tab.once('dialog', async dialog => {
+                        clearTimeout(timeout);
+                        const mensaje = dialog.message(); 
+                        linkPago = mensaje.replace("Texto copiado con éxito:", "").trim();
+                        await dialog.accept(); 
+                        resolve(true);
+                    });
+                });
+                await frameLink.click('#sc_copiar_top');
+                await dialogPromise;
+                console.log("   ✅ Link copiado.");
+            } catch (e) { console.log("   ⚠️ Alerta de link no detectada."); }
+        }
+
+        // --- C. EXTRACCIÓN PERFIL (Sin Nodo) ---
         console.log("   ⬇️ Perfil...");
-        try { await tab.click('#cel2 a'); await esperar(1000); } catch(e){}
+        const frameTabs = await encontrarFrame('#cel2 a');
+        if (frameTabs) {
+             try { await frameTabs.click('#cel2 a'); await esperar(1000); } catch(e){}
+        }
         
         let perfil = await esperarYExtraer(tab, 'perfil', 10);
+        if (!perfil) perfil = {};
 
         await tab.close();
         await page.close();
 
+        // --- LIMPIEZA DE DIRECCIÓN ---
+        let direccionLimpia = perfil.direccion || "N/A";
+        direccionLimpia = direccionLimpia.replace(/^B\/\s*/i, ''); 
+
+        // --- RETORNO FINAL ---
         return {
             id: idBusqueda,
-            perfil: perfil || {},
-            facturas: [], 
-            transacciones: []
+            link_pago: linkPago,
+            codigo_cliente: codigo,
+            movil: movil,
+            fijo: fijo,
+            nombre: perfil.nombre || "N/A",
+            plan: perfil.plan || "N/A",
+            ip: perfil.ip || "N/A",
+            estado: perfil.estado || "N/A",
+            saldo: perfil.saldo || "N/A",
+            fecha_corte: perfil.fecha_corte || "N/A",
+            direccion: direccionLimpia
         };
 
     } catch (error) {
