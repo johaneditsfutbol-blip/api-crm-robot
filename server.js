@@ -83,19 +83,16 @@ async function iniciarSistema() {
 }
 
 // ==========================================
-// 3. EXTRACTOR (MODIFICADO)
+// 3. EXTRACTOR (TU LÓGICA ORIGINAL)
 // ==========================================
 async function escanearFrames(page, tipoObjetivo) {
     for (const frame of page.frames()) {
         try {
             const data = await frame.evaluate((tipo) => {
                 if (tipo === 'perfil') {
-                    // Verificación de que estamos en el frame correcto
                     if (!document.querySelector('[id^="id_sc_field_codigo_producto"]')) return null;
                     
-                    // Helper para limpiar texto
                     const getVal = (id, labelToRemove) => {
-                        // Usamos selector "empieza por" (^) para que agarre "fecha_corte_actual_1"
                         let el = document.querySelector(`span[id^="${id}"]`);
                         if (!el) return null;
                         let txt = el.innerText;
@@ -109,9 +106,8 @@ async function escanearFrames(page, tipoObjetivo) {
                         ip: getVal('id_sc_field_ip_servicio', 'Ip Servicio:'),
                         estado: getVal('id_sc_field_estado'),
                         saldo: getVal('id_sc_field_saldo'),
-                        direccion: document.querySelector('a[id="bdireccion_servicio"]')?.getAttribute('title') || "No detectada",
-                        // 👇 AQUÍ ESTÁ EL DATO NUEVO 👇
-                        fecha_corte: getVal('id_sc_field_fecha_corte_actual') 
+                        fecha_corte: getVal('id_sc_field_fecha_corte_actual'),
+                        direccion: document.querySelector('a[id="bdireccion_servicio"]')?.getAttribute('title') || "No detectada"
                     };
                 }
             }, tipoObjetivo);
@@ -119,6 +115,20 @@ async function escanearFrames(page, tipoObjetivo) {
             if (data) return data; 
         } catch(e) {}
     }
+    return null;
+}
+
+async function esperarYExtraer(page, tipo, intentosMax = 5) {
+    console.log(`      ⏳ Esperando datos de '${tipo}'...`);
+    for (let i = 0; i < intentosMax; i++) {
+        const data = await escanearFrames(page, tipo);
+        if (data) {
+            console.log("      ✅ Datos capturados.");
+            return data;
+        }
+        await esperar(1000); // 1 segundo entre intentos (balanceado)
+    }
+    console.log("      ⚠️ Tiempo agotado.");
     return null;
 }
 
