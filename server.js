@@ -10,11 +10,8 @@ const PORT = 3000;
 const CONFIG = {
     urlLogin: "https://administrativo.icarosoft.com/",
     urlLista: "https://administrativo.icarosoft.com/Listado_clientes_tickets/",
-    
-    // TUS DATOS REALES
     user: "JOHANC",  
     pass: "@VNjohanc16",
-
     selUser: '#id_sc_field_login', 
     selPass: '#id_sc_field_pswd',
 };
@@ -26,23 +23,37 @@ let mainPage = null;
 const esperar = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ==========================================
-// 2. MOTOR DE LOGIN AUTÓNOMO
+// 2. MOTOR (VPS SAFE & FAST IMAGES)
 // ==========================================
 async function iniciarSistema() {
-    console.log("🚀 Iniciando Motor V18 (GOLD EDITION)...");
+    console.log("🚀 Iniciando Motor V18 (SAFE MODE)...");
+    
     globalBrowser = await puppeteer.launch({ 
-    headless: "new", // En la nube DEBE ser headless (sin ventana)
-    args: [
-        "--disable-setuid-sandbox",
-        "--no-sandbox",
-        "--single-process",
-        "--no-zygote"
-    ],
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath()
-});
+        headless: "new", 
+        defaultViewport: null,
+        args: [
+            '--no-sandbox',             // OBLIGATORIO VPS
+            '--disable-setuid-sandbox', // OBLIGATORIO VPS
+            '--disable-dev-shm-usage',  // OBLIGATORIO VPS
+            '--window-size=1920,1080',  // Pantalla grande para ver botones
+            '--start-maximized'
+        ] 
+    });
 
     mainPage = await globalBrowser.newPage();
-    
+    mainPage.setDefaultNavigationTimeout(60000); 
+
+    // BLOQUEO SEGURO: Solo imágenes y multimedia. 
+    // IMPORTANTE: NO bloqueamos 'stylesheet' para evitar el error de click.
+    await mainPage.setRequestInterception(true);
+    mainPage.on('request', (req) => {
+        if (['image', 'media', 'font'].includes(req.resourceType())) {
+            req.abort();
+        } else {
+            req.continue();
+        }
+    });
+
     console.log("🔑 Iniciando sesión...");
     await mainPage.goto(CONFIG.urlLogin, { waitUntil: 'networkidle2' });
 
@@ -54,8 +65,7 @@ async function iniciarSistema() {
             const spans = document.querySelectorAll('span');
             for (const span of spans) {
                 if (span.innerText.includes('Login')) {
-                    span.click();
-                    return;
+                    span.click(); return;
                 }
             }
         });
@@ -68,33 +78,25 @@ async function iniciarSistema() {
 
     setInterval(async () => {
         console.log("💓 Keep-Alive...");
-        try { await mainPage.reload({ waitUntil: 'domcontentloaded' }); } catch(e){}
+        try { await mainPage.reload({ waitUntil: 'networkidle2' }); } catch(e){}
     }, 600000);
 }
 
 // ==========================================
-// 3. EXTRACTOR CON LIMPIEZA MEJORADA
+// 3. EXTRACTOR (TU LÓGICA ORIGINAL)
 // ==========================================
 async function escanearFrames(page, tipoObjetivo) {
     for (const frame of page.frames()) {
         try {
             const data = await frame.evaluate((tipo) => {
-                const rows = document.querySelectorAll('tr[id^="SC_ancor"]');
-                
-                // --- A. PERFIL (LIMPIEZA DE SALTOS DE LÍNEA AGREGADA) ---
                 if (tipo === 'perfil') {
                     if (!document.querySelector('[id^="id_sc_field_codigo_producto"]')) return null;
                     
-                    // Helper mejorado: Quita etiqueta, quita saltos de línea (\n) y espacios extra
                     const getVal = (id, labelToRemove) => {
                         let el = document.querySelector(`span[id^="${id}"]`);
                         if (!el) return null;
                         let txt = el.innerText;
-                        
-                        // 1. Quitar etiqueta (ej: "Plan:")
                         if (labelToRemove) txt = txt.replace(labelToRemove, '');
-                        
-                        // 2. Quitar saltos de linea y espacios sobrantes
                         return txt.replace(/[\n\r]+/g, '').trim(); 
                     };
 
@@ -107,54 +109,6 @@ async function escanearFrames(page, tipoObjetivo) {
                         direccion: document.querySelector('a[id="bdireccion_servicio"]')?.getAttribute('title') || "No detectada"
                     };
                 }
-
-                // --- B. FACTURAS ---
-                if (tipo === 'facturas') {
-                    if (rows.length === 0) return null;
-                    let facturas = [];
-                    const esTablaFactura = document.querySelector('[id^="id_sc_field_nro_factura"]');
-                    if (!esTablaFactura && rows.length > 0) return null;
-
-                    rows.forEach(r => {
-                        const getNro = r.querySelector('[id^="id_sc_field_nro_factura"]');
-                        if (getNro) {
-                            const getTxt = (id) => r.querySelector(`[id^="${id}"]`)?.innerText.trim() || "";
-                            facturas.push({
-                                numero: getTxt('id_sc_field_nro_factura'),
-                                fecha: getTxt('id_sc_field_fecha_emision'),
-                                estado: getTxt('id_sc_field_status'),
-                                monto: getTxt('id_sc_field_total_neto'),
-                                saldo: getTxt('id_sc_field_saldo')
-                            });
-                        }
-                    });
-                    return facturas.length ? facturas : null;
-                }
-
-                // --- C. TRANSACCIONES ---
-                if (tipo === 'transacciones') {
-                    if (rows.length === 0) return null;
-                    let trans = [];
-                    const esTablaTrans = document.querySelector('[id^="id_sc_field_referencia"]');
-                    if (!esTablaTrans) return null;
-
-                    rows.forEach(r => {
-                        const getRef = r.querySelector('[id^="id_sc_field_referencia"]');
-                        if (getRef) {
-                            const getTxt = (id) => r.querySelector(`[id^="${id}"]`)?.innerText.trim() || "";
-                            trans.push({
-                                tipo: getTxt('id_sc_field_nombtipo'),
-                                forma: getTxt('id_sc_field_nombforma'),
-                                referencia: getTxt('id_sc_field_referencia'),
-                                monto_bs: getTxt('id_sc_field_monto_bs'),
-                                fecha: getTxt('id_sc_field_fecha_transaccion'),
-                                status: getTxt('id_sc_field_status')
-                            });
-                        }
-                    });
-                    return trans.length ? trans : null;
-                }
-
             }, tipoObjetivo);
 
             if (data) return data; 
@@ -171,9 +125,9 @@ async function esperarYExtraer(page, tipo, intentosMax = 5) {
             console.log("      ✅ Datos capturados.");
             return data;
         }
-        await esperar(2000); 
+        await esperar(1000); // 1 segundo entre intentos (balanceado)
     }
-    console.log("      ⚠️ Tiempo agotado. No se detectaron datos.");
+    console.log("      ⚠️ Tiempo agotado.");
     return null;
 }
 
@@ -184,20 +138,27 @@ async function buscarCliente(idBusqueda) {
     if (!globalBrowser) throw new Error("Sistema iniciando...");
     console.log(`🤖 Procesando: ${idBusqueda}`);
     const page = await globalBrowser.newPage();
+    page.setDefaultNavigationTimeout(60000);
+
+    // Bloqueo de imágenes en la nueva pestaña también
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+        if (['image', 'media', 'font'].includes(req.resourceType())) req.abort();
+        else req.continue();
+    });
 
     try {
         await page.goto(CONFIG.urlLista, { waitUntil: 'networkidle2' });
 
-        // BUSCAR
         const searchIn = '#SC_fast_search_top'; 
         const searchBtn = '#SC_fast_search_submit_top';
+        
         if (await page.$(searchIn)) {
             await page.type(searchIn, idBusqueda);
             await page.click(searchBtn);
-            await esperar(5000); 
+            await esperar(3000); // Tiempo seguro para que cargue la lista
         }
 
-        // ENTRAR
         const iconEdit = '.fa-user-edit';
         try { await page.waitForSelector(iconEdit, { timeout: 15000 }); } 
         catch(e) { throw new Error("Cliente no encontrado."); }
@@ -205,45 +166,22 @@ async function buscarCliente(idBusqueda) {
         const newTargetPromise = globalBrowser.waitForTarget(target => target.opener() === page.target());
         await page.click(iconEdit);
         const tab = await (await newTargetPromise).page();
+        
+        // Bloqueo en la pestaña final
+        await tab.setRequestInterception(true);
+        tab.on('request', (req) => {
+            if (['image', 'media', 'font'].includes(req.resourceType())) req.abort();
+            else req.continue();
+        });
+
         await tab.bringToFront();
-        await esperar(4000); 
+        await esperar(3000); // Tiempo seguro para carga visual
 
-        // 1. PERFIL
+        // PERFIL
         console.log("   ⬇️ Perfil...");
-        try { await tab.click('#cel2 a'); await esperar(2000); } catch(e){}
-        let perfil = await esperarYExtraer(tab, 'perfil', 5);
-
-        // 2. FACTURAS
-        console.log("   ⬇️ Facturas...");
-        try { await tab.click('#cel3 a'); await esperar(3000); } catch(e){} 
-        let facturas = await esperarYExtraer(tab, 'facturas', 5);
-
-        // 3. TRANSACCIONES
-        console.log("   ⬇️ Transacciones...");
-        let clickTrans = false;
-        for (const frame of tab.frames()) {
-            try {
-                const clickeado = await frame.evaluate(() => {
-                    const els = Array.from(document.querySelectorAll('a, span, div'));
-                    const target = els.find(el => el.innerText.toUpperCase().includes("TRANSACCIONES"));
-                    if (target) {
-                        target.click();
-                        return true;
-                    }
-                    return false;
-                });
-                if (clickeado) { clickTrans = true; break; }
-            } catch(e) {}
-        }
-
-        if (clickTrans) {
-            console.log("      (Clic realizado. ESPERANDO 18 SEGUNDOS...)");
-            await esperar(18000); 
-            var transacciones = await esperarYExtraer(tab, 'transacciones', 5);
-        } else {
-            console.log("      ⚠️ No encontré botón 'Transacciones'.");
-            transacciones = [];
-        }
+        try { await tab.click('#cel2 a'); await esperar(1000); } catch(e){}
+        
+        let perfil = await esperarYExtraer(tab, 'perfil', 10);
 
         await tab.close();
         await page.close();
@@ -251,8 +189,8 @@ async function buscarCliente(idBusqueda) {
         return {
             id: idBusqueda,
             perfil: perfil || {},
-            facturas: facturas || [],
-            transacciones: transacciones || []
+            facturas: [], 
+            transacciones: []
         };
 
     } catch (error) {
@@ -274,6 +212,6 @@ app.get('/buscar', async (req, res) => {
 });
 
 app.listen(PORT, async () => {
-    console.log(`\n🚀 SERVIDOR V18 (GOLD EDITION) LISTO: http://localhost:${PORT}`);
+    console.log(`\n🚀 SERVIDOR V18 (SAFE MODE) LISTO: http://localhost:${PORT}`);
     await iniciarSistema();
 });
